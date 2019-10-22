@@ -102,10 +102,12 @@ pxVideo::pxVideo(pxScene2d* scene):pxObject(scene)
 	  assert (nullptr != mAamp);
 	  pxVideo::pxVideoObj = this;
 	  mYuvBuffer.buffer = NULL;
+	  registerEventListener();
 }
 
 pxVideo::~pxVideo()
 {
+	unregisterEventListeners();
 	mAamp->Stop();
 	delete mAamp;
 	TermPlayerLoop();
@@ -261,9 +263,15 @@ bool pxVideo::isRotated()
 }
 
 //properties
-rtError pxVideo::availableAudioLanguages(rtObjectRef& /*v*/) const
+rtError pxVideo::availableAudioLanguages(rtObjectRef& languages) const
 {
-  //TODO
+	rtRef<rtArrayObject> array = new rtArrayObject;
+	for (int i=0; i<mPlaybackMetadata.languageCount; ++i)
+	{
+		array->pushBack(mPlaybackMetadata.languages[i]);
+	}
+
+	languages = array;
   return RT_OK;
 }
 
@@ -273,16 +281,26 @@ rtError pxVideo::availableClosedCaptionsLanguages(rtObjectRef& /*v*/) const
   return RT_OK;
 }
 
-rtError pxVideo::availableSpeeds(rtObjectRef& /*v*/) const
+rtError pxVideo::availableSpeeds(rtObjectRef& speeds) const
 {
-  //TODO
-  return RT_OK;
+	rtRef<rtArrayObject> array = new rtArrayObject;
+	for (int i=0; i<mPlaybackMetadata.supportedSpeedCount; ++i)
+	{
+		array->pushBack(mPlaybackMetadata.supportedSpeeds[i]);
+	}
+
+	speeds = array;
+	return RT_OK;
 }
 
-rtError pxVideo::duration(float& /*v*/) const
+rtError pxVideo::duration(float& duration) const
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		duration = mAamp->GetPlaybackDuration();
+	}
+
+	return RT_OK;
 }
 
 rtError pxVideo::zoom(rtString& /*v*/) const
@@ -291,22 +309,41 @@ rtError pxVideo::zoom(rtString& /*v*/) const
   return RT_OK;
 }
 
-rtError pxVideo::setZoom(const char* /*s*/)
+rtError pxVideo::setZoom(const char* zoom)
 {
-  //TODO
-  return RT_OK;
+	if (!mAamp || NULL == zoom)
+	{
+		return RT_OK;
+	}
+
+	VideoZoomMode zoomMode = VIDEO_ZOOM_FULL;
+	if (0 != strcmp(zoom, "full"))
+	{
+		zoomMode = VIDEO_ZOOM_NONE;
+	}
+
+	rtLogInfo("%s:%d: zoom mode: %s",__FUNCTION__,__LINE__, zoomMode == VIDEO_ZOOM_FULL ? "Full" : "None");
+	mAamp->SetVideoZoom(zoomMode);
+
+	return RT_OK;
 }
 
-rtError pxVideo::volume(uint32_t& /*v*/) const
+rtError pxVideo::volume(uint32_t& volume) const
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		volume = mAamp->GetAudioVolume();
+	}
+	return RT_OK;
 }
 
-rtError pxVideo::setVolume(uint32_t /*v*/)
+rtError pxVideo::setVolume(uint32_t volume)
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		mAamp->SetAudioVolume(volume);
+	}
+	return RT_OK;
 }
 
 rtError pxVideo::closedCaptionsOptions(rtObjectRef& /*v*/) const
@@ -345,43 +382,72 @@ rtError pxVideo::setContentOptions(rtObjectRef /*v*/)
   return RT_OK;
 }
 
-rtError pxVideo::speed(float& /*v*/) const
+rtError pxVideo::speed(float& rate) const
 {
-  //TODO
+  if (mAamp)
+  {
+    rate = mAamp->GetPlaybackRate();
+  }
+
   return RT_OK;
 }
 
 rtError pxVideo::setSpeedProperty(float speed)
 {
-  if(mAamp)
-  {
-     mAamp->SetRate(speed);
-  }
-  return RT_OK;
+	if(mAamp)
+	{
+		 mAamp->SetRate(speed);
+	}
+	return RT_OK;
 }
 
-rtError pxVideo::position(float& /*v*/) const
+rtError pxVideo::position(float& position) const
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		position = mAamp->GetPlaybackPosition();
+	}
+
+	return RT_OK;
 }
 
-rtError pxVideo::setPosition(float /*v*/)
+rtError pxVideo::setPosition(float position)
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		auto playbackDuration = mAamp->GetPlaybackDuration();
+
+		if (position < 0)
+		{
+			position = 0;
+		}
+		else if (position > playbackDuration)
+		{
+			position = playbackDuration;
+		}
+
+		rtLogInfo("%s:%d: Seek to %.2fs",__FUNCTION__,__LINE__, position);
+		mAamp->Seek(position);
+	}
+	return RT_OK;
 }
 
-rtError pxVideo::audioLanguage(rtString& /*v*/) const
+rtError pxVideo::audioLanguage(rtString& audioLanguage) const
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		audioLanguage = mAamp->GetCurrentAudioLanguage();
+	}
+	return RT_OK;
 }
 
-rtError pxVideo::setAudioLanguage(const char* /*s*/)
+rtError pxVideo::setAudioLanguage(const char* audioLanguage)
 {
-  //TODO
-  return RT_OK;
+	if (mAamp && audioLanguage != NULL)
+	{
+		mAamp->SetLanguage(audioLanguage);
+	}
+	return RT_OK;
 }
 
 rtError pxVideo::secondaryAudioLanguage(rtString& /*v*/) const
@@ -495,10 +561,28 @@ rtError pxVideo::setSpeed(float speed, float overshootCorrection)
 	return RT_OK;
 }
 
-rtError pxVideo::setPositionRelative(float /*seconds*/)
+rtError pxVideo::setPositionRelative(float secondsRelativePosition)
 {
-  //TODO
-  return RT_OK;
+	if (mAamp)
+	{
+		auto secondsCurrentPosition = mAamp->GetPlaybackPosition();
+		auto secondsPlaybackDuration = mAamp->GetPlaybackDuration();
+
+		auto secondsRelativePositionToTuneTime = secondsCurrentPosition + secondsRelativePosition;
+
+		if (secondsRelativePositionToTuneTime < 0)
+		{
+			secondsRelativePositionToTuneTime = 0;
+		}
+		else if (secondsRelativePositionToTuneTime > secondsPlaybackDuration)
+		{
+			secondsRelativePositionToTuneTime = secondsPlaybackDuration;
+		}
+
+		rtLogInfo("%s:%d: Seek %.2f seconds from %.2fs to %.2fs",__FUNCTION__,__LINE__, secondsRelativePosition, secondsCurrentPosition, secondsRelativePositionToTuneTime);
+		mAamp->Seek(secondsRelativePositionToTuneTime);
+	}
+	return RT_OK;
 }
 
 rtError pxVideo::requestStatus()
@@ -511,6 +595,54 @@ rtError pxVideo::setAdditionalAuth(rtObjectRef /*params*/)
 {
   //TODO
   return RT_OK;
+}
+
+
+MediaMetadataListener::MediaMetadataListener(PlaybackMetadata& metadata)
+: mMetadata(metadata)
+{
+}
+
+void MediaMetadataListener::Event(const AAMPEvent& event)
+{
+	mMetadata.languageCount = event.data.metadata.languageCount;
+	for (int i=0; i<mMetadata.languageCount; ++i)
+	{
+		strncpy(mMetadata.languages[i], event.data.metadata.languages[i], MAX_LANGUAGE_TAG_LENGTH);
+	}
+
+	mMetadata.supportedSpeedCount = event.data.metadata.supportedSpeedCount;
+	for (int i=0; i<mMetadata.supportedSpeedCount; ++i)
+	{
+		mMetadata.supportedSpeeds[i] = event.data.metadata.supportedSpeeds[i];
+	}
+}
+
+
+void pxVideo::registerEventListener()
+{
+	if (mAamp)
+	{
+		auto * listener = new MediaMetadataListener(mPlaybackMetadata);
+
+		mAamp->AddEventListener(AAMPEventType::AAMP_EVENT_MEDIA_METADATA,  listener);
+		mEventlisteners[AAMPEventType::AAMP_EVENT_MEDIA_METADATA] = listener;
+	}
+}
+
+void pxVideo::unregisterEventListeners()
+{
+	if (mAamp)
+	{
+		for (auto it = mEventlisteners.begin(); it != mEventlisteners.end(); ++it)
+		{
+			auto * listener = it->second;
+			mAamp->RemoveEventListener(it->first, listener);
+			mEventlisteners.erase(it);
+			delete listener;
+			listener = NULL;
+		}
+	}
 }
 
 rtDefineObject(pxVideo, pxObject);

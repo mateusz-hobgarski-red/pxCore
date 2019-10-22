@@ -26,8 +26,17 @@
 #include "pxScene2d.h"
 #include "pxObject.h"
 #include "pxContext.h"
+#include <map>
 
 //#define AAMP_USE_SHADER 1
+
+struct PlaybackMetadata
+{
+	int languageCount;                                              /**< Available language count */
+	char languages[MAX_LANGUAGE_COUNT][MAX_LANGUAGE_TAG_LENGTH];    /**< Available languages */
+	int supportedSpeedCount;                                        /**< Supported playback speed count */
+	int supportedSpeeds[MAX_SUPPORTED_SPEED_COUNT];                 /**< Supported playback speeds */
+};
 
 class pxVideo: public pxObject
 {
@@ -112,10 +121,13 @@ public:
   void updateYUVFrame(uint8_t *yuvBuffer, int size, int pixel_w, int pixel_h);
 
 private:
+
   void InitPlayerLoop();
   void TermPlayerLoop();
   static void* AAMPGstPlayer_StreamThread(void *arg);
   static void newAampFrame(void* context, void* data);
+  void registerEventListener();
+  void unregisterEventListeners();
 
 private:
     static GMainLoop *AAMPGstPlayerMainLoop;
@@ -139,8 +151,25 @@ private:
     bool initialized = false;
     GThread *aampMainLoopThread;
 
+    std::map<AAMPEventType, AAMPEventListener*> mEventlisteners;
+
+    PlaybackMetadata mPlaybackMetadata;
+
 public:
     static pxVideo *pxVideoObj; //This object
 };
+
+class MediaMetadataListener : public AAMPEventListener
+{
+	public:
+	MediaMetadataListener(PlaybackMetadata&);
+	~MediaMetadataListener() = default;
+	void Event(const AAMPEvent& event) override;
+
+	private:
+
+	PlaybackMetadata& mMetadata;
+};
+
 
 #endif // PX_VIDEO_H
